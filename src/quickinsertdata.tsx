@@ -1,69 +1,40 @@
-import { Action, ActionPanel, Detail, Form, List, useNavigation } from "@raycast/api";
-import React, { useState } from "react";
-/**
- * SQL解析逻辑
- */
-function parseSql(sql: string) {
-  const match = sql.match(/INSERT INTO (\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)(.*)/s);
-  if (!match) throw new Error("无法解析 SQL 语句");
-  const [, tableName, columns, firstValues, rest] = match;
-  const columnNames = columns.split(",").map((c) => c.trim()).filter((col) => col);
-  const rows = [firstValues, ...rest.match(/\(([^)]+)\)/g)?.map((v) => v.slice(1, -1)) || []];
-  const rowData = rows
-    .map((row) =>
-      row.split(",").map((value) => value.trim().replace(/['"]/g, ""))
-    )
-    .filter((row) => row.some((value) => value.trim() !== ""));
-  return { tableName, columnNames, rowData };
-}
+import { Action, ActionPanel, Form, Icon, List, useNavigation, Detail, LaunchProps, Alert } from "@raycast/api";
+import { parseSql, generateSql, getDataBySort } from "./utils";
+import { useState } from "react";
 
-function generateSql({
-  tableName,
-  columnNames,
-  rowData,
-}: {
-  tableName: string;
-  columnNames: string[];
-  rowData: string[][];
-}) {
-  const columnsStr = columnNames.join(", ");
-  const valuesStr = rowData
-    .map((row) => `(${row.map((value) => `'${value}'`).join(", ")})`)
-    .join(",\n ");
-
-  return `INSERT INTO ${tableName} (\n ${columnsStr}\n)\nVALUES\n ${valuesStr}`;
+interface Todo {
+  [key: string]: unknown; // 允许任意数量的动态字段
 }
 
 /**
- * 主组件
+ * 初始化
  */
 export default function Command() {
   const { push } = useNavigation();
   const [sql, setSql] = useState<string>(`INSERT INTO sdep_tender_fees (
-          tenant_id,
-          tender_fees_num
+          id,
+          title,
+          isCompleted,
          )
          VALUES
           (
            252107,
-           'TEF20241101010005'
+           'TEF20241101010005',
+           123
           ),
           (
            252108,
-           'TEF20241101010006'
+           'TEF20241101010006',
+           1234
           )`);
-  const [tableData, setTableData] = useState<{
-    tableName: string;
-    columnNames: string[];
-    rowData: string[][];
-  } | null>(null);
+
 
   const handleSqlSubmit = (inputSql: string) => {
     try {
       const parsed = parseSql(inputSql);
       setSql(inputSql);
-      setTableData(parsed);
-      push(<EditTable tableData={parsed} onTableDataChange={setTableData} />);
+      // setTableData(parsed);
+      push(<TodoList data={parsed} />);
     } catch (error) {
       push(
         <Detail markdown={`# 错误\n无法解析 SQL，请检查输入。\n\n${error}`} />
@@ -84,122 +55,155 @@ export default function Command() {
   );
 }
 
-/**
- * 编辑表格
- */
-function EditTable({
-  tableData,
-  onTableDataChange,
-}: {
-  tableData: { tableName: string; columnNames: string[]; rowData: string[][] };
-  onTableDataChange: React.Dispatch<
-    React.SetStateAction<{
-      tableName: string;
-      columnNames: string[];
-      rowData: string[][];
-    } | null>
-  >;
-}) {
-  const { columnNames, rowData } = tableData;
+// 列表
+function TodoList(props: { data: { rowData: { map: (arg0: (i: object, idx: number) => { z__idx: string; }) => Todo[] | (() => Todo[]); }; tableName: Todo[] | (() => Todo[]); }; }) {
   const { push } = useNavigation();
+  // 初始化时新增索引
+  const [todos, setTodos] = useState<Todo[]>(props.data.rowData.map((i: object, idx: number) => ({...i, z__idx: `line-${idx+1}`})));
+  // console.log('todos--', todos);
+  const [tableName, setTableName] = useState<Todo[]>(props.data.tableName);
 
-  const handleRowClick = (rowIndex: number) => {
-    push(
-      <EditRowForm
-        rowIndex={rowIndex}
-        columnNames={columnNames}
-        rowData={rowData}
-        onSave={(updatedRow) => {
-          const updatedRows = [...rowData];
-          updatedRows[rowIndex] = updatedRow;
-          onTableDataChange((prev) => (prev ? { ...prev, rowData: updatedRows } : null));
-        }}
-      />
-    );
-  };
+  function handleCreate(todo: Todo) {
+   
+    if (todo.z__idx) {
+      // todo的修改
+      const idx = todos.findIndex((i) => i.z__idx === todo.z__idx);
+      // console.log('handleCreate', todos, todo, idx);
+      if (idx > -1 && todo) {
+        const newTodos = [...todos];
+        newTodos.splice(idx, 1, getDataBySort(todo));
+        // console.log('setTodos- newTodos', newTodos);
+        setTodos(newTodos);
+      }
+    } else {
+       // todo的新增
+      const newTodos = [...todos, getDataBySort(todo)];
+      setTodos(newTodos);
+    }
+  }
+
+  function handleDelete(index: number) {
+    const newTodos = [...todos];
+    newTodos.splice(index, 1);
+    setTodos(newTodos);
+  }
 
   const handleGenerateSql = () => {
-    if (tableData) {
-      const newSql = generateSql(tableData);
+    if (todos) {
+      const newSql = generateSql({tableName, rowData: [...todos].map(i => {
+        const _item = i;
+        delete _item.z__idx;
+        return _item;
+      })});
       push(<SqlOutput sql={newSql} />);
     }
   };
 
   return (
-    <List>
-      <List.Section title="表格内容">
-        {rowData.map((row, rowIndex) => (
-          <List.Item
-            key={rowIndex}
-            title={`行 ${rowIndex + 1}`}
-            accessories={columnNames.map((col, colIndex) => ({
-              text: `${col}: ${row[colIndex]}`,
-            }))}
-            actions={
-              <ActionPanel>
-                <Action title="查看/编辑明细" onAction={() => handleRowClick(rowIndex)} />
-                <Action title="生成 Sql" onAction={handleGenerateSql} />
-              </ActionPanel>
-            }
-          />
-        ))}
-      </List.Section>
+    <List
+      actions={
+        <ActionPanel>
+           <GenerateSqlAction onGenerateSql={handleGenerateSql} />
+        </ActionPanel>
+      }
+    >
+      {todos.map((todo, index) => (
+        <List.Item
+          key={index}
+          // icon={todo.isCompleted ? Icon.Checkmark : Icon.Circle}
+          title={`${index + 1} 行: ${JSON.stringify(todo)}` }
+          // title={todo.title}
+          actions={
+            <ActionPanel>
+              <ActionPanel.Section>
+                <EditTodoAction formData={todo} onCreate={handleCreate} />
+              </ActionPanel.Section>
+              <ActionPanel.Section>
+                <GenerateSqlAction onGenerateSql={handleGenerateSql} />
+              </ActionPanel.Section>
+              <ActionPanel.Section>
+                <DeleteTodoAction onDelete={() => handleDelete(index)} />
+              </ActionPanel.Section>
+            </ActionPanel>
+          }
+        />
+      ))}
     </List>
   );
 }
 
-/**
- * 编辑行表单页面
- */
-function EditRowForm({
-  rowIndex,
-  columnNames,
-  rowData,
-  onSave,
-}: {
-  rowIndex: number;
-  columnNames: string[];
-  rowData: string[][];
-  onSave: (updatedRow: string[]) => void;
-}) {
+// 修改
+function CreateTodoForm(props: { formData: object, onCreate: (todo: Todo) => void }) {
   const { pop } = useNavigation();
-  const [row, setRow] = useState([...rowData[rowIndex]]);
 
-  const handleFieldChange = (index: number, value: string) => {
-    const updatedRow = [...row];
-    updatedRow[index] = value.trim();
-    setRow(updatedRow);
-  };
-
-  const handleSave = () => {
-    onSave(row);
+  function handleSubmit(values: { title: string, id: string,  }) {
+    console.log('handleSubmit', values);
+    props.onCreate(values);
     pop();
-  };
+  }
 
+  const { formData } = props || {};
   return (
     <Form
       actions={
         <ActionPanel>
-          <Action.SubmitForm title="保存" onSubmit={handleSave} />
+          <Action.SubmitForm title="确定" onSubmit={handleSubmit} />
         </ActionPanel>
       }
     >
-      {columnNames.map((col, index) => (
-        <Form.TextField
-          key={index}
-          id={`field-${index}`}
-          title={col}
-          value={row[index]}
-          onChange={(value) => handleFieldChange(index, value)}
-        />
-      ))}
+      {Object.keys(formData).map((item, idx) => {
+        return (
+          <Form.TextField
+            storeValue={true}
+            key={idx}
+            id={item}
+            title={item}
+            value={formData[item]}
+            //  value={formData ? formData[item] : ''}
+          />
+        );
+      })}
     </Form>
   );
 }
 
-/**
- * 输出 SQL 结果组件
- */
+// 编辑
+function EditTodoAction(props: { formData: object, onCreate: (todo: Todo) => void }) {
+  return (
+    <Action.Push
+      icon={Icon.Pencil}
+      title="编辑"
+      shortcut={{ modifiers: ["cmd"], key: "n" }}
+      target={<CreateTodoForm formData={props.formData} onCreate={props.onCreate} />}
+    />
+  );
+}
+
+// 删除
+function DeleteTodoAction(props: { onDelete: () => void }) {
+  return (
+    <Action
+      icon={Icon.Trash}
+      title="Delete Todo"
+      shortcut={{ modifiers: ["ctrl"], key: "x" }}
+      onAction={props.onDelete}
+    />
+  );
+}
+
+// 删除
+function GenerateSqlAction(props: { onGenerateSql: () => void }) {
+  return (
+    <Action
+      icon={Icon.AddPerson}
+      title="生成 Sql"
+      shortcut={{ modifiers: ["cmd"], key: "r" }}
+      onAction={props.onGenerateSql}
+    />
+  );
+}
+
+// SQL输出
 function SqlOutput({ sql }: { sql: string }) {
   return (
     <Detail
